@@ -98,8 +98,10 @@ cross-spawn@6.0.5:
     shebang-command "^1.2.0"
     which "^1.2.9"
 
-elm-codegen@../elm-codegen:
+elm-codegen@^0.5.0:
   version "0.5.0"
+  resolved "https://registry.yarnpkg.com/elm-codegen/-/elm-codegen-0.5.0.tgz#ecf825eafdf93729724219a05f0a53b382784f93"
+  integrity sha512-n4l/LnUZzTjGtWBTjVtVr0S2tCSm4DnB/0joeQyflqs8+AnyyDPUSMioAoPgGEXA1hc01Fwjt99M76YEo/Rvow==
   dependencies:
     chalk "^4.1.1"
     chokidar "^3.5.1"
