@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "elm-codegen": "../elm-codegen"
+  }
+}
