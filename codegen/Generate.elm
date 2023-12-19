@@ -111,6 +111,10 @@ declarationToDeclarations (Node range declaration) =
                 typeName =
                     Node.value type_.name
 
+                allName : String
+                allName =
+                    toAllName typeName
+
                 documentation : String
                 documentation =
                     type_.documentation
@@ -130,6 +134,7 @@ declarationToDeclarations (Node range declaration) =
                                 variants
                                     |> Elm.customType typeName
                                     |> Elm.withDocumentation documentation
+                                    |> Elm.expose
                             )
 
                 allAlias : Results Elm.Declaration
@@ -138,36 +143,61 @@ declarationToDeclarations (Node range declaration) =
                         (\c ->
                             c
                                 |> classifiedToAlias
-                                |> Elm.alias (toAllName typeName)
+                                |> Elm.alias allName
+                                |> Elm.expose
                         )
                         classified
-            in
-            case classified of
-                Ok (Named ctor args) ->
-                    [ redefinition
-                    , allAlias
-                    , Elm.Annotation.namedWith [] (toAllName typeName) [ Elm.Annotation.named [] typeName ]
-                        |> Elm.alias (typeName ++ "Builder")
-                        |> Ok
-                    , args
-                        |> List.foldr
-                            (\arg acc ->
-                                Elm.apply (Elm.val <| String.Extra.decapitalize <| toAllName arg)
-                                    [ Elm.fn ( arg, Nothing ) <| \_ -> acc
-                                    ]
-                            )
-                            (Elm.apply (Elm.val ctor) (List.map (Elm.val << String.Extra.decapitalize) args))
-                        |> Elm.withType (Elm.Annotation.named [] (typeName ++ "Builder"))
-                        |> Elm.declaration (typeName ++ "Builder")
-                        |> Ok
-                    ]
-                        |> combineErrors
 
-                _ ->
-                    [ redefinition
-                    , allAlias
-                    ]
-                        |> combineErrors
+                specific : List (Results Elm.Declaration)
+                specific =
+                    case classified of
+                        Ok (Named ctor args) ->
+                            [ Elm.Annotation.namedWith [] allName [ Elm.Annotation.named [] typeName ]
+                                |> Elm.alias (typeName ++ "Builder")
+                                |> Elm.expose
+                                |> Ok
+                            , args
+                                |> List.foldr
+                                    (\arg acc ->
+                                        Elm.apply (Elm.val <| String.Extra.decapitalize <| toAllName arg)
+                                            [ Elm.fn ( arg, Nothing ) <| \_ -> acc
+                                            ]
+                                    )
+                                    (Elm.apply (Elm.val ctor) (List.map (Elm.val << String.Extra.decapitalize) args))
+                                |> Elm.withType (Elm.Annotation.named [] (typeName ++ "Builder"))
+                                |> Elm.declaration (typeName ++ "Builder")
+                                |> Elm.expose
+                                |> Ok
+                            ]
+
+                        Ok (Enum variants) ->
+                            [ (Elm.fn
+                                ( "toBuilder"
+                                , Just
+                                    (Elm.Annotation.function [ Elm.Annotation.named [] typeName ]
+                                        (Elm.Annotation.var "builder")
+                                    )
+                                )
+                               <|
+                                \toBuilder ->
+                                    variants
+                                        |> List.map (\variant -> ( variant, Elm.apply toBuilder [ Elm.val variant ] ))
+                                        |> Elm.record
+                                        |> Elm.withType (Elm.Annotation.namedWith [] allName [ Elm.Annotation.var "builder" ])
+                              )
+                                |> Elm.declaration allName
+                                |> Elm.expose
+                                |> Ok
+                            ]
+
+                        Err _ ->
+                            []
+            in
+            [ redefinition
+            , allAlias
+            ]
+                ++ specific
+                |> combineErrors
 
         _ ->
             err range
