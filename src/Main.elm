@@ -7,9 +7,14 @@ import Types exposing (Accent(..), Color(..), Hue(..), Opacity(..), Target(..))
 
 main : Html msg
 main =
-    Html.div [ colorToAttr Types.colorBuilder.font.op100.normal.primary ]
+    Html.div [ colorAttrs.font.op100.normal.primary ]
         [ Html.text "Hello"
         ]
+
+
+colorAttrs : Types.AllColors (Attribute msg)
+colorAttrs =
+    Types.allColors colorToAttr
 
 
 colorToAttr : Color -> Attribute msg

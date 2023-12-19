@@ -134,70 +134,87 @@ declarationToDeclarations (Node range declaration) =
                                 variants
                                     |> Elm.customType typeName
                                     |> Elm.withDocumentation documentation
-                                    |> Elm.expose
                             )
 
-                allAlias : Results Elm.Declaration
-                allAlias =
-                    Result.map
-                        (\c ->
-                            c
-                                |> classifiedToAlias
-                                |> Elm.alias allName
-                                |> Elm.expose
+                allAlias : List ( String, List String ) -> Elm.Declaration
+                allAlias variants =
+                    variants
+                        |> classifiedToAlias
+                        |> Elm.alias allName
+
+                builderAlias : Elm.Declaration
+                builderAlias =
+                    Elm.Annotation.namedWith [] allName [ Elm.Annotation.named [] typeName ]
+                        |> Elm.alias (typeName ++ "Builder")
+
+                variantToBuilder : Maybe Elm.Expression -> ( String, List String ) -> Elm.Expression
+                variantToBuilder builder ( ctor, args ) =
+                    args
+                        |> List.foldr
+                            (\arg acc ->
+                                Elm.apply (Elm.val <| String.Extra.decapitalize <| toAllName arg)
+                                    [ Elm.fn ( arg, Nothing ) <| \_ -> acc
+                                    ]
+                            )
+                            (let
+                                arg =
+                                    Elm.apply (Elm.val ctor) (List.map (Elm.val << String.Extra.decapitalize) args)
+                             in
+                             builder
+                                |> Maybe.map (\b -> Elm.apply b [ arg ])
+                                |> Maybe.withDefault arg
+                            )
+
+                toBuilder : Maybe Elm.Expression -> List ( String, List String ) -> Elm.Expression
+                toBuilder builder variants =
+                    case variants of
+                        [ variant ] ->
+                            variantToBuilder builder variant
+
+                        _ ->
+                            variants
+                                |> List.map
+                                    (\(( variantName, _ ) as variant) ->
+                                        ( variantName
+                                        , variantToBuilder builder variant
+                                        )
+                                    )
+                                |> Elm.record
+
+                allDeclaration : List ( String, List String ) -> Elm.Declaration
+                allDeclaration variants =
+                    (Elm.fn
+                        ( "toBuilder"
+                        , Just
+                            (Elm.Annotation.function [ Elm.Annotation.named [] typeName ]
+                                (Elm.Annotation.var "builder")
+                            )
                         )
-                        classified
+                     <|
+                        \builder ->
+                            toBuilder (Just builder) variants
+                                |> Elm.withType (Elm.Annotation.namedWith [] allName [ Elm.Annotation.var "builder" ])
+                    )
+                        |> Elm.declaration allName
 
-                specific : List (Results Elm.Declaration)
-                specific =
-                    case classified of
-                        Ok (Named ctor args) ->
-                            [ Elm.Annotation.namedWith [] allName [ Elm.Annotation.named [] typeName ]
-                                |> Elm.alias (typeName ++ "Builder")
-                                |> Elm.expose
-                                |> Ok
-                            , args
-                                |> List.foldr
-                                    (\arg acc ->
-                                        Elm.apply (Elm.val <| String.Extra.decapitalize <| toAllName arg)
-                                            [ Elm.fn ( arg, Nothing ) <| \_ -> acc
-                                            ]
-                                    )
-                                    (Elm.apply (Elm.val ctor) (List.map (Elm.val << String.Extra.decapitalize) args))
-                                |> Elm.withType (Elm.Annotation.named [] (typeName ++ "Builder"))
-                                |> Elm.declaration (typeName ++ "Builder")
-                                |> Elm.expose
-                                |> Ok
-                            ]
-
-                        Ok (Enum variants) ->
-                            [ (Elm.fn
-                                ( "toBuilder"
-                                , Just
-                                    (Elm.Annotation.function [ Elm.Annotation.named [] typeName ]
-                                        (Elm.Annotation.var "builder")
-                                    )
-                                )
-                               <|
-                                \toBuilder ->
-                                    variants
-                                        |> List.map (\variant -> ( variant, Elm.apply toBuilder [ Elm.val variant ] ))
-                                        |> Elm.record
-                                        |> Elm.withType (Elm.Annotation.namedWith [] allName [ Elm.Annotation.var "builder" ])
-                              )
-                                |> Elm.declaration allName
-                                |> Elm.expose
-                                |> Ok
-                            ]
-
-                        Err _ ->
-                            []
+                builderDeclaration : Classified -> Elm.Declaration
+                builderDeclaration variants =
+                    toBuilder Nothing variants
+                        |> Elm.withType (Elm.Annotation.named [] (typeName ++ "Builder"))
+                        |> Elm.declaration (typeName ++ "Builder")
             in
-            [ redefinition
-            , allAlias
-            ]
-                ++ specific
-                |> combineErrors
+            Result.map2
+                (\variants redef ->
+                    [ redef
+                    , allAlias variants
+                    , allDeclaration variants
+                    , builderAlias
+                    , builderDeclaration variants
+                    ]
+                        |> List.map (Elm.exposeWith { exposeConstructor = True, group = Nothing })
+                )
+                classified
+                redefinition
 
         _ ->
             err range
@@ -207,20 +224,27 @@ declarationToDeclarations (Node range declaration) =
 
 
 classifiedToAlias : Classified -> Elm.Annotation.Annotation
-classifiedToAlias classified =
-    case classified of
-        Enum variants ->
-            variants
-                |> List.map (\variant -> ( variant, Elm.Annotation.var "builder" ))
-                |> Elm.Annotation.record
-
-        Named _ args ->
+classifiedToAlias variants =
+    let
+        variantToValue args =
             List.foldr
                 (\arg acc ->
                     Elm.Annotation.namedWith [] (toAllName arg) [ acc ]
                 )
                 (Elm.Annotation.var "builder")
                 args
+    in
+    case variants of
+        [ ( _, args ) ] ->
+            variantToValue args
+
+        _ ->
+            variants
+                |> List.map
+                    (\( variant, args ) ->
+                        ( variant, variantToValue args )
+                    )
+                |> Elm.Annotation.record
 
 
 toAllName : String -> String
@@ -232,44 +256,30 @@ toAllName arg =
         "All" ++ arg ++ "s"
 
 
+type alias Classified =
+    List ( String, List String )
+
+
 toClassified : List (Node Type.ValueConstructor) -> Results Classified
 toClassified constructors =
-    case constructors of
-        [ Node _ { name, arguments } ] ->
-            arguments
-                |> combineMapAccumulate
-                    (\(Node argRange arg) ->
-                        case arg of
-                            TypeAnnotation.Typed (Node _ ( [], argName )) [] ->
-                                Ok argName
+    constructors
+        |> combineMapAccumulate
+            (\(Node _ { name, arguments }) ->
+                arguments
+                    |> combineMapAccumulate
+                        (\(Node argRange arg) ->
+                            case arg of
+                                TypeAnnotation.Typed (Node _ ( [], argName )) [] ->
+                                    Ok argName
 
-                            _ ->
-                                err argRange
-                                    { title = "Unsupported argument"
-                                    , description = "TODO"
-                                    }
-                    )
-                |> Result.map (Named (Node.value name))
-
-        _ ->
-            constructors
-                |> combineMapAccumulate
-                    (\(Node constructorRange { name, arguments }) ->
-                        if List.isEmpty arguments then
-                            Ok (Node.value name)
-
-                        else
-                            err constructorRange
-                                { title = "Unexpected argument"
-                                , description = "TODO"
-                                }
-                    )
-                |> Result.map Enum
-
-
-type Classified
-    = Enum (List String)
-    | Named String (List String)
+                                _ ->
+                                    err argRange
+                                        { title = "Unsupported argument"
+                                        , description = "TODO"
+                                        }
+                        )
+                    |> Result.map (Tuple.pair (Node.value name))
+            )
 
 
 constructorToVariant : Node Type.ValueConstructor -> Results Elm.Variant

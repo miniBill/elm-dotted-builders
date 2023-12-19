@@ -25,3 +25,7 @@ type Accent
 
 type Color
     = Color Target Opacity Accent Hue
+
+type SimpleColor
+    = JustHue Hue
+    | HueWithOpacity Hue Opacity
